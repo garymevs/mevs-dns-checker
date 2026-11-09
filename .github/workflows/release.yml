@@ -1,0 +1,95 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-${{ matrix.asset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: dnscheck_Linux_x86_64
+          - goos: linux
+            goarch: arm64
+            asset: dnscheck_Linux_arm64
+          - goos: darwin
+            goarch: amd64
+            asset: dnscheck_Darwin_x86_64
+          - goos: darwin
+            goarch: arm64
+            asset: dnscheck_Darwin_arm64
+          - goos: windows
+            goarch: amd64
+            asset: dnscheck_Windows_x86_64
+            ext: .exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          EXT="${{ matrix.ext }}"
+          go build -trimpath -ldflags "-s -w -X github.com/garymevs/mevs-dns-checker/internal/version.Version=${GITHUB_REF_NAME}" \
+            -o "dist/dnscheck${EXT}" ./cmd/dnscheck
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -q "${{ matrix.asset }}.zip" "dnscheck${EXT}"
+          else
+            tar -czf "${{ matrix.asset }}.tar.gz" "dnscheck${EXT}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.*
+          if-no-files-found: error
+
+  release:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp -v {} dist/ \;
+          cd dist
+          sha256sum * > checksums.txt
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

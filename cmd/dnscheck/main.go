@@ -10,6 +10,7 @@ import (
 	"github.com/garymevs/mevs-dns-checker/internal/dns"
 	"github.com/garymevs/mevs-dns-checker/internal/email"
 	"github.com/garymevs/mevs-dns-checker/internal/tui"
+	"github.com/garymevs/mevs-dns-checker/internal/version"
 )
 
 func main() {
@@ -20,6 +21,10 @@ func main() {
 	}
 	if cfg.Help {
 		fmt.Fprint(os.Stdout, cli.Usage())
+		return
+	}
+	if cfg.ShowVersion {
+		fmt.Fprintln(os.Stdout, version.Version)
 		return
 	}
 

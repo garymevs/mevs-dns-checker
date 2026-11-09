@@ -15,15 +15,53 @@ TUI DNS checker inspired by [dnschecker.org](https://dnschecker.org): query a do
 
 ## Install
 
+Installers download the **latest GitHub Release** binary for your platform, put it on `PATH`, and (on Linux/Omarchy) register a searchable **DNS Checker** launcher entry.
+
+### Linux / macOS / Omarchy
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/garymevs/mevs-dns-checker/master/scripts/install.sh | bash
+```
+
+Re-run anytime to upgrade. Options:
+
+```bash
+# specific tag
+curl -fsSL .../install.sh | bash -s -- --version v0.1.0
+
+# build from source instead (needs git + Go)
+curl -fsSL .../install.sh | bash -s -- --from-source
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/garymevs/mevs-dns-checker/master/scripts/install.ps1 | iex
+```
+
+```powershell
+.\scripts\install.ps1 -Version v0.1.0
+.\scripts\install.ps1 -FromSource
+```
+
+### Manual / developers
+
 ```bash
 go install github.com/garymevs/mevs-dns-checker/cmd/dnscheck@latest
-```
-
-Or from this repo:
-
-```bash
+# or
 go build -o dnscheck ./cmd/dnscheck
 ```
+
+## Releasing
+
+Tag a version and push — GitHub Actions builds multi-platform archives and publishes a Release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Assets: `dnscheck_Linux_x86_64.tar.gz`, `dnscheck_Linux_arm64.tar.gz`, `dnscheck_Darwin_x86_64.tar.gz`, `dnscheck_Darwin_arm64.tar.gz`, `dnscheck_Windows_x86_64.zip`, plus `checksums.txt`.
 
 ## Usage
 
@@ -34,6 +72,7 @@ dnscheck example.com -t MX
 dnscheck example.com -t EMAIL
 dnscheck example.com -dkim-selector google,selector1
 dnscheck example.com -t EMAIL -plain
+dnscheck -version
 ```
 
 ### Flags
@@ -44,6 +83,7 @@ dnscheck example.com -t EMAIL -plain
 | `-dkim-selector` | Comma-separated selectors (selects `EMAIL`) |
 | `-timeout` | Per-resolver timeout seconds (default `3`) |
 | `-plain` | Text output instead of TUI |
+| `-V` / `-version` | Print version |
 
 ### TUI keys
 
@@ -66,4 +106,6 @@ internal/dns/          multi-resolver client
 internal/resolvers/    public resolver list
 internal/email/        SPF / DKIM / DMARC
 internal/tui/          Bubble Tea UI + plain renderer
+scripts/               install.sh / install.ps1
+.github/workflows/     release builds
 ```

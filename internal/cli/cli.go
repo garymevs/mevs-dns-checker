@@ -17,6 +17,7 @@ type Config struct {
 	TimeoutSec    int
 	NoTUI         bool // plain text output
 	Help          bool
+	ShowVersion   bool
 }
 
 var valueFlags = map[string]struct{}{
@@ -45,6 +46,8 @@ func Parse(args []string) (Config, error) {
 		dkim      = fs.String("dkim-selector", "", "Comma-separated DKIM selectors (EMAIL type)")
 		timeout   = fs.Int("timeout", 3, "Per-resolver timeout in seconds")
 		plain     = fs.Bool("plain", false, "Plain text output instead of TUI")
+		ver       = fs.Bool("version", false, "Print version and exit")
+		verShort  = fs.Bool("V", false, "Print version and exit")
 		help      = fs.Bool("help", false, "Show help")
 		helpShort = fs.Bool("h", false, "Show help")
 	)
@@ -61,13 +64,14 @@ func Parse(args []string) (Config, error) {
 	}
 
 	cfg := Config{
-		Domain:     strings.TrimSpace(domain),
-		TimeoutSec: *timeout,
-		NoTUI:      *plain,
-		Help:       *help || *helpShort,
+		Domain:      strings.TrimSpace(domain),
+		TimeoutSec:  *timeout,
+		NoTUI:       *plain,
+		Help:        *help || *helpShort,
+		ShowVersion: *ver || *verShort,
 	}
 
-	if cfg.Help {
+	if cfg.Help || cfg.ShowVersion {
 		return cfg, nil
 	}
 
@@ -149,6 +153,7 @@ Flags:
   -dkim-selector string    DKIM selectors for EMAIL (comma-separated; selects EMAIL)
   -timeout int             Per-resolver timeout seconds (default 3)
   -plain                   Plain text output (no TUI)
+  -V, -version             Print version
   -h, -help                Show help
 
 Examples:
