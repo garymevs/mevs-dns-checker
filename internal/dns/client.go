@@ -96,8 +96,14 @@ func (c *Client) queryOne(ctx context.Context, resolver resolvers.Resolver, doma
 	msg := new(mdns.Msg)
 	msg.SetQuestion(mdns.Fqdn(domain), qtype)
 	msg.RecursionDesired = true
+	msg.SetEdns0(4096, false)
 
-	client := &mdns.Client{Timeout: timeout, Dialer: &net.Dialer{Timeout: timeout}}
+	client := &mdns.Client{
+		Net:     "udp",
+		Timeout: timeout,
+		UDPSize: 4096,
+		Dialer:  &net.Dialer{Timeout: timeout},
+	}
 
 	start := time.Now()
 	resp, rtt, err := client.ExchangeContext(ctx, msg, resolver.Address)
@@ -107,6 +113,20 @@ func (c *Client) queryOne(ctx context.Context, resolver resolvers.Resolver, doma
 	if resp == nil {
 		return Result{Resolver: resolver, RTT: rtt, Err: fmt.Errorf("empty response")}
 	}
+
+	// Large TXT/RRsets often exceed UDP; retry over TCP when truncated.
+	if resp.Truncated {
+		tcpClient := &mdns.Client{
+			Net:     "tcp",
+			Timeout: timeout,
+			Dialer:  &net.Dialer{Timeout: timeout},
+		}
+		tcpResp, tcpRTT, tcpErr := tcpClient.ExchangeContext(ctx, msg, resolver.Address)
+		if tcpErr == nil && tcpResp != nil {
+			resp, rtt = tcpResp, rtt+tcpRTT
+		}
+	}
+
 	if resp.Rcode != mdns.RcodeSuccess {
 		return Result{
 			Resolver: resolver,

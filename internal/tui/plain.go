@@ -26,27 +26,37 @@ func WritePlain(w io.Writer, sum dns.Summary, _ *email.Report) {
 	fmt.Fprintln(w, strings.Repeat("-", 60))
 	for _, r := range sum.Results {
 		rtt := formatRTT(r.RTT)
-		var result string
-		if r.HasError() {
-			result = "ERR: " + r.Err.Error()
-		} else if len(r.Values) == 0 {
-			result = "(no records)"
-		} else {
-			result = strings.Join(r.Values, ", ")
+		prefix := fmt.Sprintf("%-18s %-10s %-8s ", r.Resolver.Name, r.Resolver.Region, rtt)
+		cont := strings.Repeat(" ", len(prefix))
+		switch {
+		case r.HasError():
+			fmt.Fprintf(w, "%sERR: %s\n", prefix, r.Err.Error())
+		case len(r.Values) == 0:
+			fmt.Fprintf(w, "%s(no records)\n", prefix)
+		default:
+			for i, v := range r.Values {
+				if i == 0 {
+					fmt.Fprintf(w, "%s%s\n", prefix, v)
+				} else {
+					fmt.Fprintf(w, "%s%s\n", cont, v)
+				}
+			}
 		}
-		fmt.Fprintf(w, "%-18s %-10s %-8s %s\n", r.Resolver.Name, r.Resolver.Region, rtt, result)
 	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Answer groups:")
 	for i, g := range sum.Consensus() {
-		label := strings.Join(g.Values, ", ")
+		fmt.Fprintf(w, "  [%d] %d resolver(s)\n", i+1, g.Count)
 		if g.Error != "" {
-			label = "ERR: " + g.Error
-		} else if label == "" {
-			label = "(empty)"
+			fmt.Fprintf(w, "      ERR: %s\n", g.Error)
+		} else if len(g.Values) == 0 {
+			fmt.Fprintln(w, "      (empty)")
+		} else {
+			for _, v := range g.Values {
+				fmt.Fprintf(w, "      · %s\n", v)
+			}
 		}
-		fmt.Fprintf(w, "  [%d] %d resolver(s): %s\n", i+1, g.Count, label)
 		fmt.Fprintf(w, "      %s\n", strings.Join(g.Resolvers, ", "))
 	}
 }

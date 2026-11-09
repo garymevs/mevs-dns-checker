@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -38,14 +39,15 @@ type Options struct {
 
 // Model is the Bubble Tea root model.
 type Model struct {
-	opts    Options
-	client  *dns.Client
-	checker *email.Checker
-	mode    mode
-	input   textinput.Model
-	spinner spinner.Model
+	opts        Options
+	client      *dns.Client
+	checker     *email.Checker
+	mode        mode
+	input       textinput.Model
+	spinner     spinner.Model
+	viewport    viewport.Model
 	loading     bool
-	domain      string // last checked domain (for recheck)
+	domain      string
 	checkedType dns.RecordType
 	summary     *dns.Summary
 	report      *email.Report
@@ -79,14 +81,17 @@ func New(opts Options) Model {
 	}
 
 	m := Model{
-		opts:    opts,
-		client:  client,
-		checker: email.NewChecker(client),
-		mode:    modeInteractive,
-		input:   ti,
-		spinner: sp,
-		domain:  opts.Domain,
-		typeIdx: indexOfType(opts.Type),
+		opts:     opts,
+		client:   client,
+		checker:  email.NewChecker(client),
+		mode:     modeInteractive,
+		input:    ti,
+		spinner:  sp,
+		viewport: viewport.New(80, 20),
+		domain:   opts.Domain,
+		typeIdx:  indexOfType(opts.Type),
+		width:    80,
+		height:   24,
 	}
 	if opts.Type == "" {
 		m.typeIdx = 0
@@ -144,11 +149,31 @@ func (m Model) runCheck(domain string) tea.Cmd {
 	}
 }
 
+func (m *Model) syncViewport() {
+	if m.mode != modeResults {
+		return
+	}
+	header := m.resultsHeader()
+	footer := m.resultsFooter()
+	headerHeight := lipgloss.Height(header)
+	footerHeight := lipgloss.Height(footer)
+	titleHeight := 3 // title + subtitle + blank
+	avail := m.height - titleHeight - headerHeight - footerHeight
+	if avail < 3 {
+		avail = 3
+	}
+	m.viewport.Width = max(1, m.width)
+	m.viewport.Height = avail
+	m.viewport.SetContent(m.resultsBody())
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.input.Width = min(40, max(10, msg.Width-8))
+		m.syncViewport()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -176,6 +201,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.mode = modeResults
 		m.status = ""
+		m.syncViewport()
+		m.viewport.GotoTop()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -257,26 +284,46 @@ func (m Model) updateResults(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.loading = true
 		return m, tea.Batch(m.spinner.Tick, m.runCheck(domain))
-	case "tab", "right":
+	case "tab":
 		m.typeIdx = (m.typeIdx + 1) % len(dns.SupportedTypes)
+		m.syncViewport()
 		return m, nil
-	case "shift+tab", "left":
+	case "shift+tab":
 		m.typeIdx--
 		if m.typeIdx < 0 {
 			m.typeIdx = len(dns.SupportedTypes) - 1
 		}
+		m.syncViewport()
 		return m, nil
-	case "i", "esc":
+	case "i":
 		m.mode = modeInteractive
 		m.input.Focus()
 		return m, textinput.Blink
+	case "left", "right":
+		// Reserve horizontal arrows for type change (not viewport).
+		if msg.String() == "right" {
+			m.typeIdx = (m.typeIdx + 1) % len(dns.SupportedTypes)
+		} else {
+			m.typeIdx--
+			if m.typeIdx < 0 {
+				m.typeIdx = len(dns.SupportedTypes) - 1
+			}
+		}
+		m.syncViewport()
+		return m, nil
 	}
-	return m, nil
+
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
 }
 
 func (m Model) View() string {
 	if m.width == 0 {
 		m.width = 80
+	}
+	if m.height == 0 {
+		m.height = 24
 	}
 
 	var b strings.Builder
@@ -298,7 +345,10 @@ func (m Model) View() string {
 	case modeInteractive:
 		b.WriteString(m.viewForm())
 	case modeResults:
-		b.WriteString(m.viewResults())
+		b.WriteString(m.resultsHeader())
+		b.WriteString(m.viewport.View())
+		b.WriteString("\n")
+		b.WriteString(m.resultsFooter())
 	}
 
 	return b.String()
@@ -306,7 +356,7 @@ func (m Model) View() string {
 
 func (m Model) viewForm() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Width(min(m.width-2, 72)).Render("Interactive lookup"))
+	b.WriteString(headerStyle.Width(contentWidth(m.width)).Render("Interactive lookup"))
 	b.WriteString("\n")
 	b.WriteString("Domain\n")
 	b.WriteString(inputStyle.Render(m.input.View()))
@@ -343,12 +393,13 @@ func (m Model) renderTypeDescription() string {
 	if desc == "" {
 		return ""
 	}
-	return muteStyle.Render("      "+desc) + "\n"
+	w := contentWidth(m.width)
+	return muteStyle.Render(wrapLine("      "+desc, w)) + "\n"
 }
 
-func (m Model) viewResults() string {
+func (m Model) resultsHeader() string {
 	if m.summary == nil && m.report == nil {
-		return failStyle.Render("No results")
+		return failStyle.Render("No results") + "\n"
 	}
 
 	selected := m.currentType()
@@ -364,7 +415,7 @@ func (m Model) viewResults() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(headerStyle.Width(min(m.width-2, 90)).Render(fmt.Sprintf("%s  ·  %s", domain, shown)))
+	b.WriteString(headerStyle.Width(contentWidth(m.width)).Render(fmt.Sprintf("%s  ·  %s", domain, shown)))
 	b.WriteString("\n")
 	b.WriteString(m.renderTypePicker())
 	b.WriteString("\n")
@@ -374,15 +425,22 @@ func (m Model) viewResults() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-
-	if shown == dns.TypeEMAIL {
-		b.WriteString(m.viewEmailResults())
-	} else {
-		b.WriteString(m.viewDNSResults())
-	}
-
-	b.WriteString(helpStyle.Render("tab type · enter/r check · i/esc edit · q quit"))
 	return b.String()
+}
+
+func (m Model) resultsFooter() string {
+	return helpStyle.Render("tab type · enter/r check · ↑↓/pg scroll · i/esc edit · q quit")
+}
+
+func (m Model) resultsBody() string {
+	shown := m.checkedType
+	if shown == "" && m.summary != nil {
+		shown = m.summary.Type
+	}
+	if shown == dns.TypeEMAIL {
+		return m.viewEmailResults()
+	}
+	return m.viewDNSResults()
 }
 
 func (m Model) viewDNSResults() string {
@@ -390,6 +448,7 @@ func (m Model) viewDNSResults() string {
 		return failStyle.Render("No DNS results") + "\n"
 	}
 	sum := m.summary
+	w := contentWidth(m.width)
 	var b strings.Builder
 
 	agree := warnStyle.Render("differences across resolvers")
@@ -399,28 +458,37 @@ func (m Model) viewDNSResults() string {
 	b.WriteString(agree)
 	b.WriteString("\n\n")
 
-	rowFmt := "%-18s %-8s %-8s %s\n"
-	b.WriteString(muteStyle.Render(fmt.Sprintf(rowFmt, "RESOLVER", "REGION", "RTT", "ANSWER")))
+	metaW := 18 + 1 + 8 + 1 + 8 + 1 // name region rtt spaces
+	valueW := w - metaW
+	if valueW < 20 {
+		valueW = 20
+	}
+
+	b.WriteString(muteStyle.Render(fmt.Sprintf("%-18s %-8s %-8s %s", "RESOLVER", "REGION", "RTT", "ANSWER")))
+	b.WriteString("\n")
+
 	for _, r := range sum.Results {
 		name := r.Resolver.Name
 		region := r.Resolver.Region
 		rtt := formatRTT(r.RTT)
-		var answer string
+		prefix := fmt.Sprintf("%-18s %-8s %-8s ", name, region, rtt)
+		cont := strings.Repeat(" ", len(prefix))
+
+		var block string
 		style := lipgloss.NewStyle()
-		if r.HasError() {
-			answer = "ERR: " + r.Err.Error()
+		switch {
+		case r.HasError():
+			block = wrapLine(prefix+"ERR: "+r.Err.Error(), w)
 			style = failStyle
-		} else if len(r.Values) == 0 {
-			answer = "(empty)"
+		case len(r.Values) == 0:
+			block = prefix + "(empty)"
 			style = muteStyle
-		} else {
-			answer = strings.Join(r.Values, ", ")
-			if len(answer) > 60 {
-				answer = answer[:57] + "..."
-			}
+		case len(r.Values) == 1 && utf8Len(r.Values[0]) <= valueW:
+			block = prefix + r.Values[0]
+		default:
+			block = formatValuesBlock(r.Values, prefix, cont, w)
 		}
-		line := fmt.Sprintf(rowFmt, name, region, rtt, answer)
-		b.WriteString(style.Render(strings.TrimRight(line, "\n")))
+		b.WriteString(style.Render(block))
 		b.WriteString("\n")
 	}
 
@@ -428,23 +496,21 @@ func (m Model) viewDNSResults() string {
 	b.WriteString(lipgloss.NewStyle().Bold(true).Render("Consensus groups"))
 	b.WriteString("\n")
 	for _, g := range sum.Consensus() {
-		label := strings.Join(g.Values, ", ")
-		st := okStyle
+		count := okStyle.Render(fmt.Sprintf("×%d", g.Count))
 		if g.Error != "" {
-			label = "ERR: " + g.Error
-			st = failStyle
-		} else if label == "" {
-			label = "(empty)"
-			st = muteStyle
+			b.WriteString(fmt.Sprintf("  %s  %s\n", count, failStyle.Render("ERR: "+g.Error)))
+		} else if len(g.Values) == 0 {
+			b.WriteString(fmt.Sprintf("  %s  %s\n", count, muteStyle.Render("(empty)")))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s\n", count))
+			for _, v := range g.Values {
+				b.WriteString(wrapLine("    · "+v, w))
+				b.WriteString("\n")
+			}
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s\n",
-			st.Render(fmt.Sprintf("×%d", g.Count)),
-			label,
-		))
-		b.WriteString(muteStyle.Render("    "+strings.Join(g.Resolvers, ", ")))
+		b.WriteString(muteStyle.Render(wrapLine("    "+strings.Join(g.Resolvers, ", "), w)))
 		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 	return b.String()
 }
 
@@ -452,19 +518,19 @@ func (m Model) viewEmailResults() string {
 	if m.report == nil {
 		return failStyle.Render("No email auth results") + "\n"
 	}
+	w := contentWidth(m.width)
 	var b strings.Builder
 	b.WriteString(lipgloss.NewStyle().Bold(true).Render("SPF / DKIM / DMARC"))
 	b.WriteString("\n\n")
-	b.WriteString(renderEmailCheck(m.report.SPF))
-	b.WriteString(renderEmailCheck(m.report.DMARC))
+	b.WriteString(renderEmailCheck(m.report.SPF, w))
+	b.WriteString(renderEmailCheck(m.report.DMARC, w))
 	for _, d := range m.report.DKIM {
-		b.WriteString(renderEmailCheck(d))
+		b.WriteString(renderEmailCheck(d, w))
 	}
-	b.WriteString("\n")
 	return b.String()
 }
 
-func renderEmailCheck(c email.CheckResult) string {
+func renderEmailCheck(c email.CheckResult, width int) string {
 	var st lipgloss.Style
 	switch c.Status {
 	case email.StatusPass:
@@ -477,23 +543,32 @@ func renderEmailCheck(c email.CheckResult) string {
 		st = failStyle
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("  %s %s — %s\n",
+	b.WriteString(wrapLine(fmt.Sprintf("  %s %s — %s",
 		st.Render(strings.ToUpper(string(c.Status))),
 		c.Name,
 		c.Summary,
-	))
+	), width))
+	b.WriteString("\n")
 	for _, d := range c.Details {
-		if len(d) > 100 {
-			d = d[:97] + "..."
-		}
-		b.WriteString(muteStyle.Render("    · "+d))
+		b.WriteString(muteStyle.Render(wrapLine("    · "+d, width)))
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
+func utf8Len(s string) int {
+	return len([]rune(s))
+}
+
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
