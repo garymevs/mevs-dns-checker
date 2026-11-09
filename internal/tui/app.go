@@ -44,15 +44,16 @@ type Model struct {
 	mode    mode
 	input   textinput.Model
 	spinner spinner.Model
-	loading bool
-	domain  string // last checked domain (for recheck / tab switch)
-	summary *dns.Summary
-	report  *email.Report
-	err     error
-	width   int
-	height  int
-	typeIdx int
-	status  string
+	loading     bool
+	domain      string // last checked domain (for recheck)
+	checkedType dns.RecordType
+	summary     *dns.Summary
+	report      *email.Report
+	err         error
+	width       int
+	height      int
+	typeIdx     int
+	status      string
 }
 
 // New creates the TUI model. If Domain is set, a check starts immediately.
@@ -171,6 +172,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.summary = &sum
 		m.report = msg.report
 		m.domain = sum.Domain
+		m.checkedType = sum.Type
 		m.err = nil
 		m.mode = modeResults
 		m.status = ""
@@ -249,7 +251,7 @@ func (m Model) updateResults(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "r":
+	case "enter", "r":
 		if domain == "" {
 			return m, nil
 		}
@@ -257,19 +259,11 @@ func (m Model) updateResults(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, m.runCheck(domain))
 	case "tab", "right":
 		m.typeIdx = (m.typeIdx + 1) % len(dns.SupportedTypes)
-		if domain != "" {
-			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, m.runCheck(domain))
-		}
 		return m, nil
 	case "shift+tab", "left":
 		m.typeIdx--
 		if m.typeIdx < 0 {
 			m.typeIdx = len(dns.SupportedTypes) - 1
-		}
-		if domain != "" {
-			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, m.runCheck(domain))
 		}
 		return m, nil
 	case "i", "esc":
@@ -357,27 +351,37 @@ func (m Model) viewResults() string {
 		return failStyle.Render("No results")
 	}
 
-	rtype := m.currentType()
+	selected := m.currentType()
+	shown := m.checkedType
+	if shown == "" && m.summary != nil {
+		shown = m.summary.Type
+	}
+	pending := selected != shown
+
 	domain := m.domain
 	if m.summary != nil && domain == "" {
 		domain = m.summary.Domain
 	}
 
 	var b strings.Builder
-	b.WriteString(headerStyle.Width(min(m.width-2, 90)).Render(fmt.Sprintf("%s  ·  %s", domain, rtype)))
+	b.WriteString(headerStyle.Width(min(m.width-2, 90)).Render(fmt.Sprintf("%s  ·  %s", domain, shown)))
 	b.WriteString("\n")
 	b.WriteString(m.renderTypePicker())
 	b.WriteString("\n")
 	b.WriteString(m.renderTypeDescription())
+	if pending {
+		b.WriteString(warnStyle.Render(fmt.Sprintf("      enter to check %s", selected)))
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
 
-	if rtype == dns.TypeEMAIL {
+	if shown == dns.TypeEMAIL {
 		b.WriteString(m.viewEmailResults())
 	} else {
 		b.WriteString(m.viewDNSResults())
 	}
 
-	b.WriteString(helpStyle.Render("r recheck · tab type · i/esc edit · q quit"))
+	b.WriteString(helpStyle.Render("tab type · enter/r check · i/esc edit · q quit"))
 	return b.String()
 }
 

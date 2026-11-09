@@ -89,10 +89,10 @@ dnscheck -version
 
 | Key | Action |
 |-----|--------|
-| `enter` | Run check (form) |
-| `tab` / `shift+tab` | Change type (includes EMAIL) |
-| `←` `→` | Change type (results) |
-| `r` | Recheck (results) |
+| `enter` | Run check |
+| `tab` / `shift+tab` | Change type (does not auto-query) |
+| `←` `→` | Change type on results (does not auto-query) |
+| `r` | Recheck current/selected type (results) |
 | `i` / `esc` | Back to domain input |
 | `q` | Quit (results; form uses `ctrl+c`) |
 | `ctrl+c` | Quit |
