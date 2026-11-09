@@ -1,0 +1,5 @@
+/dnscheck
+*.exe
+*.test
+/dist/
+/bin/
