@@ -93,6 +93,7 @@ dnscheck -version
 | `tab` / `shift+tab` | Change type (does not auto-query) |
 | `←` `→` | Change type on results (does not auto-query) |
 | `r` | Recheck current/selected type (results) |
+| `s` | Set DKIM selectors, then re-run EMAIL (results) |
 | `↑` `↓` / PgUp / PgDn | Scroll results |
 | `i` / `esc` | Back to domain input |
 | `q` | Quit (results; form uses `ctrl+c`) |

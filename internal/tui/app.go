@@ -21,6 +21,7 @@ type mode int
 const (
 	modeInteractive mode = iota
 	modeResults
+	modeDKIM // edit DKIM selectors after a search
 )
 
 type checkDoneMsg struct {
@@ -39,23 +40,25 @@ type Options struct {
 
 // Model is the Bubble Tea root model.
 type Model struct {
-	opts        Options
-	client      *dns.Client
-	checker     *email.Checker
-	mode        mode
-	input       textinput.Model
-	spinner     spinner.Model
-	viewport    viewport.Model
-	loading     bool
-	domain      string
-	checkedType dns.RecordType
-	summary     *dns.Summary
-	report      *email.Report
-	err         error
-	width       int
-	height      int
-	typeIdx     int
-	status      string
+	opts          Options
+	client        *dns.Client
+	checker       *email.Checker
+	mode          mode
+	input         textinput.Model
+	dkimInput     textinput.Model
+	dkimSelectors []string
+	spinner       spinner.Model
+	viewport      viewport.Model
+	loading       bool
+	domain        string
+	checkedType   dns.RecordType
+	summary       *dns.Summary
+	report        *email.Report
+	err           error
+	width         int
+	height        int
+	typeIdx       int
+	status        string
 }
 
 // New creates the TUI model. If Domain is set, a check starts immediately.
@@ -75,23 +78,34 @@ func New(opts Options) Model {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colorAcc)
 
+	dkim := textinput.New()
+	dkim.Placeholder = "google,selector1 (comma-separated; empty = common list)"
+	dkim.CharLimit = 200
+	dkim.Width = 50
+	dkim.Prompt = "› "
+	if len(opts.DKIMSelectors) > 0 {
+		dkim.SetValue(strings.Join(opts.DKIMSelectors, ","))
+	}
+
 	client := dns.NewClient()
 	if opts.Timeout > 0 {
 		client.Timeout = opts.Timeout
 	}
 
 	m := Model{
-		opts:     opts,
-		client:   client,
-		checker:  email.NewChecker(client),
-		mode:     modeInteractive,
-		input:    ti,
-		spinner:  sp,
-		viewport: viewport.New(80, 20),
-		domain:   opts.Domain,
-		typeIdx:  indexOfType(opts.Type),
-		width:    80,
-		height:   24,
+		opts:          opts,
+		client:        client,
+		checker:       email.NewChecker(client),
+		mode:          modeInteractive,
+		input:         ti,
+		dkimInput:     dkim,
+		dkimSelectors: append([]string(nil), opts.DKIMSelectors...),
+		spinner:       sp,
+		viewport:      viewport.New(80, 20),
+		domain:        opts.Domain,
+		typeIdx:       indexOfType(opts.Type),
+		width:         80,
+		height:        24,
 	}
 	if opts.Type == "" {
 		m.typeIdx = 0
@@ -125,10 +139,25 @@ func (m Model) currentType() dns.RecordType {
 	return dns.SupportedTypes[m.typeIdx]
 }
 
+func parseSelectors(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func (m *Model) selectEMAILType() {
+	m.typeIdx = indexOfType(dns.TypeEMAIL)
+}
+
 func (m Model) runCheck(domain string) tea.Cmd {
 	domain = strings.TrimSpace(domain)
 	rtype := m.currentType()
-	selectors := m.opts.DKIMSelectors
+	selectors := append([]string(nil), m.dkimSelectors...)
 	client := m.client
 	checker := m.checker
 
@@ -173,6 +202,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.Width = min(40, max(10, msg.Width-8))
+		m.dkimInput.Width = min(60, max(20, msg.Width-12))
 		m.syncViewport()
 		return m, nil
 
@@ -210,31 +240,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "q":
-			if m.mode != modeInteractive {
+			// Don't steal q while typing domain or DKIM selectors.
+			if m.mode == modeResults {
 				return m, tea.Quit
 			}
 		case "esc":
-			if m.mode == modeResults {
+			switch m.mode {
+			case modeDKIM:
+				m.dkimInput.Blur()
+				m.mode = modeResults
+				m.syncViewport()
+				return m, nil
+			case modeResults:
 				m.mode = modeInteractive
 				m.input.Focus()
 				return m, textinput.Blink
+			default:
+				return m, tea.Quit
 			}
-			return m, tea.Quit
 		}
 
 		if m.loading {
 			return m, nil
 		}
 
-		if m.mode == modeInteractive {
+		switch m.mode {
+		case modeInteractive:
 			return m.updateInteractive(msg)
+		case modeDKIM:
+			return m.updateDKIM(msg)
+		default:
+			return m.updateResults(msg)
 		}
-		return m.updateResults(msg)
 	}
 
 	if m.mode == modeInteractive {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+	if m.mode == modeDKIM {
+		var cmd tea.Cmd
+		m.dkimInput, cmd = m.dkimInput.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -284,6 +331,16 @@ func (m Model) updateResults(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.loading = true
 		return m, tea.Batch(m.spinner.Tick, m.runCheck(domain))
+	case "s":
+		if len(m.dkimSelectors) > 0 {
+			m.dkimInput.SetValue(strings.Join(m.dkimSelectors, ","))
+		} else {
+			m.dkimInput.SetValue("")
+		}
+		m.dkimInput.CursorEnd()
+		m.dkimInput.Focus()
+		m.mode = modeDKIM
+		return m, textinput.Blink
 	case "tab":
 		m.typeIdx = (m.typeIdx + 1) % len(dns.SupportedTypes)
 		m.syncViewport()
@@ -300,7 +357,6 @@ func (m Model) updateResults(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		return m, textinput.Blink
 	case "left", "right":
-		// Reserve horizontal arrows for type change (not viewport).
 		if msg.String() == "right" {
 			m.typeIdx = (m.typeIdx + 1) % len(dns.SupportedTypes)
 		} else {
@@ -315,6 +371,32 @@ func (m Model) updateResults(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateDKIM(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.dkimSelectors = parseSelectors(m.dkimInput.Value())
+		m.dkimInput.Blur()
+		m.selectEMAILType()
+		domain := m.domain
+		if domain == "" && m.summary != nil {
+			domain = m.summary.Domain
+		}
+		if domain == "" {
+			m.mode = modeInteractive
+			m.input.Focus()
+			m.status = "Enter a domain, then re-check EMAIL"
+			return m, textinput.Blink
+		}
+		m.loading = true
+		m.mode = modeResults
+		return m, tea.Batch(m.spinner.Tick, m.runCheck(domain))
+	}
+
+	var cmd tea.Cmd
+	m.dkimInput, cmd = m.dkimInput.Update(msg)
 	return m, cmd
 }
 
@@ -344,6 +426,8 @@ func (m Model) View() string {
 	switch m.mode {
 	case modeInteractive:
 		b.WriteString(m.viewForm())
+	case modeDKIM:
+		b.WriteString(m.viewDKIMForm())
 	case modeResults:
 		b.WriteString(m.resultsHeader())
 		b.WriteString(m.viewport.View())
@@ -351,6 +435,25 @@ func (m Model) View() string {
 		b.WriteString(m.resultsFooter())
 	}
 
+	return b.String()
+}
+
+func (m Model) viewDKIMForm() string {
+	domain := m.domain
+	if domain == "" {
+		domain = "(no domain yet)"
+	}
+	var b strings.Builder
+	b.WriteString(headerStyle.Width(contentWidth(m.width)).Render("DKIM selectors"))
+	b.WriteString("\n")
+	b.WriteString(muteStyle.Render("Domain: "+domain))
+	b.WriteString("\n\n")
+	b.WriteString("Selectors (comma-separated)\n")
+	b.WriteString(inputStyle.Render(m.dkimInput.View()))
+	b.WriteString("\n\n")
+	b.WriteString(muteStyle.Render("Leave empty to probe the common selector list."))
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("enter check EMAIL · esc cancel"))
 	return b.String()
 }
 
@@ -424,12 +527,20 @@ func (m Model) resultsHeader() string {
 		b.WriteString(warnStyle.Render(fmt.Sprintf("      enter to check %s", selected)))
 		b.WriteString("\n")
 	}
+	if shown == dns.TypeEMAIL || selected == dns.TypeEMAIL {
+		sel := "common list"
+		if len(m.dkimSelectors) > 0 {
+			sel = strings.Join(m.dkimSelectors, ", ")
+		}
+		b.WriteString(muteStyle.Render(wrapLine("      DKIM: "+sel+"  (s to set)", contentWidth(m.width))))
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
 	return b.String()
 }
 
 func (m Model) resultsFooter() string {
-	return helpStyle.Render("tab type · enter/r check · ↑↓/pg scroll · i/esc edit · q quit")
+	return helpStyle.Render("tab type · enter/r check · s dkim · ↑↓/pg scroll · i/esc edit · q quit")
 }
 
 func (m Model) resultsBody() string {
