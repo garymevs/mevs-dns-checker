@@ -3,3 +3,9 @@
 *.test
 /dist/
 /bin/
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+

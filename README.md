@@ -1,5 +1,7 @@
 # mevs-dns-checker
 
+> **Vibecoded slop disclaimer:** this was AI-assisted / vibecoded. Treat it as experimental software with sharp edges. You are responsible for what you do with any information it shows, and you should confirm results against other sources before acting on them.
+
 TUI DNS checker inspired by [dnschecker.org](https://dnschecker.org): query a domain across many public resolvers, or inspect SPF / DKIM / DMARC via the **EMAIL** tab.
 
 ## Features
